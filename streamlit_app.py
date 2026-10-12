@@ -5,13 +5,11 @@ import streamlit as st
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import requests, base64, io, os, time, hashlib
+import numpy as np
+import plotly.graph_objects as go
 from pathlib import Path
 
-st.set_page_config(
-    page_title="WA Sender | Avro India",
-    page_icon="📱",
-    layout="wide"
-)
+st.set_page_config(page_title="WA Sender | Avro India", page_icon="📱", layout="wide")
 
 # ════════════════════════════════════════════════
 # PASSWORD GATE
@@ -37,8 +35,7 @@ def _check_login():
         if st.button("Login →", type="primary", use_container_width=True):
             correct = st.secrets.get("app_password", "avro@2024")
             if pwd == correct:
-                st.session_state["_auth"] = True
-                st.rerun()
+                st.session_state["_auth"] = True; st.rerun()
             else:
                 st.error("❌ Galat password!")
         st.caption("💡 Password nahi pata? Ankit se poochho.")
@@ -59,12 +56,6 @@ except Exception:
     _IMGBB = ""
 
 CAMPAIGNS = ["Avro India Limited Dealer", "Avrodealers"]
-
-try:
-    from streamlit_drawable_canvas import st_canvas
-    _CANVAS = True
-except Exception:
-    _CANVAS = False
 
 # ── Fonts ──────────────────────────────────────
 FONT_DIR = Path("/tmp/wa_fonts")
@@ -91,10 +82,8 @@ def load_fonts():
             try:
                 r = requests.get(url, timeout=15); r.raise_for_status()
                 dest.write_bytes(r.content)
-            except Exception:
-                continue
-        if dest.exists():
-            paths[name] = str(dest)
+            except Exception: continue
+        if dest.exists(): paths[name] = str(dest)
     for fp in ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                "/System/Library/Fonts/Helvetica.ttc"]:
         if os.path.exists(fp):
@@ -118,20 +107,6 @@ for k, v in {"boxes":[], "template_pil":None, "df":None,
         st.session_state[k] = v
 
 # ── Image helpers ──────────────────────────────
-def draw_preview(pil, boxes, ei=None):
-    img  = pil.copy().convert("RGB")
-    draw = ImageDraw.Draw(img)
-    lf   = get_pil_font("Roboto", max(14, min(pil.size)//40))
-    for i, box in enumerate(boxes):
-        x,y,w,h = int(box["x"]),int(box["y"]),int(box["w"]),int(box["h"])
-        col = "#1565C0" if i==ei else "#E53935"
-        draw.rectangle([x,y,x+w,y+h], outline=col, width=3 if i==ei else 2)
-        txt = f" {i+1}. {box['label']} "
-        bb = draw.textbbox((x,y), txt, font=lf)
-        draw.rectangle([bb[0],max(0,bb[1]-2),bb[2],bb[3]+2], fill=col)
-        draw.text((x+2,max(0,y-lf.size)), txt, fill="white", font=lf)
-    return img
-
 def render_image(pil, boxes, row):
     img  = pil.copy().convert("RGB")
     draw = ImageDraw.Draw(img)
@@ -144,18 +119,18 @@ def render_image(pil, boxes, row):
         align = box.get("align","center")
         words = text.split(); lines, cur = [], ""
         for word in words:
-            t = (cur+" "+word).strip()
-            if draw.textbbox((0,0),t,font=font)[2] <= w-8: cur=t
+            t=(cur+" "+word).strip()
+            if draw.textbbox((0,0),t,font=font)[2]<=w-8: cur=t
             else:
                 if cur: lines.append(cur)
                 cur=word
         if cur: lines.append(cur)
         if not lines: lines=[""]
-        lh = fsize+4; ty = y+max(0,(h-len(lines)*lh)//2)
+        lh=fsize+4; ty=y+max(0,(h-len(lines)*lh)//2)
         for line in lines:
-            bb = draw.textbbox((0,0),line,font=font); tw=bb[2]-bb[0]
-            tx = x+(w-tw)//2 if align=="center" else (x+w-tw-4 if align=="right" else x+4)
-            draw.text((tx,ty), line, font=font, fill=color); ty+=lh
+            bb=draw.textbbox((0,0),line,font=font); tw=bb[2]-bb[0]
+            tx=x+(w-tw)//2 if align=="center" else (x+w-tw-4 if align=="right" else x+4)
+            draw.text((tx,ty),line,font=font,fill=color); ty+=lh
     return img
 
 def upload_imgbb(img_pil, api_key):
@@ -180,6 +155,51 @@ def send_aisensy(api_key, campaign, phone, uname, params, img_url=""):
     if not r.ok: raise Exception(f"{r.status_code}: {r.text}")
     try: return r.json()
     except: return {"status":"sent"}
+
+def make_plotly_canvas(pil, boxes):
+    """Image ko Plotly figure mein dikhao — drag se box banta hai."""
+    iw, ih = pil.size
+    buf = io.BytesIO()
+    pil.convert("RGB").save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    img_src = f"data:image/png;base64,{b64}"
+
+    fig = go.Figure()
+    # Background image
+    fig.add_layout_image(dict(
+        source=img_src,
+        x=0, y=0, xref="x", yref="y",
+        sizex=iw, sizey=ih,
+        xanchor="left", yanchor="top",
+        layer="below", sizing="stretch",
+    ))
+    # Existing boxes as shapes + labels
+    colors = ["#E53935","#1565C0","#2E7D32","#F57F17","#6A1B9A"]
+    for i, box in enumerate(boxes):
+        col = colors[i % len(colors)]
+        x0,y0 = box["x"], box["y"]
+        x1,y1 = x0+box["w"], y0+box["h"]
+        fig.add_shape(type="rect", x0=x0,y0=y0,x1=x1,y1=y1,
+                      line=dict(color=col,width=2),
+                      fillcolor=col.replace("#","rgba(").rstrip(")")+",0.15)")
+        fig.add_annotation(x=x0,y=y0, text=f"  {i+1}. {box['label']}  ",
+                           showarrow=False, xanchor="left", yanchor="bottom",
+                           bgcolor=col, font=dict(color="white",size=12), yshift=-2)
+
+    fig.update_xaxes(range=[0,iw], showgrid=False, showticklabels=False,
+                     zeroline=False, fixedrange=True)
+    fig.update_yaxes(range=[ih,0], showgrid=False, showticklabels=False,
+                     zeroline=False, fixedrange=True, scaleanchor="x", scaleratio=1)
+    fig.update_layout(
+        margin=dict(l=0,r=0,t=0,b=0),
+        height=min(600, int(600*ih/iw)),
+        dragmode="select",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        newselection_line_color="#E53935",
+        newselection_line_width=2,
+    )
+    return fig
 
 # ════════════════════════════════════════════════
 # HEADER
@@ -229,7 +249,6 @@ with tab1:
     if img_file is not None:
         raw   = img_file.read()
         h_new = hashlib.md5(raw).hexdigest()
-        # Sirf nayi image pe boxes reset karo
         if st.session_state.img_hash != h_new:
             st.session_state.template_pil = Image.open(io.BytesIO(raw)).convert("RGBA")
             st.session_state.boxes        = []
@@ -245,115 +264,73 @@ with tab1:
 
     left_col, right_col = st.columns([3, 2])
 
-    if _CANVAS:
-        MAX_W = 820
-        c_s = min(1.0, MAX_W/iw)
-        cw, ch = int(iw*c_s), int(ih*c_s)
-        canvas_bg = pil.convert("RGB").resize((cw,ch), Image.LANCZOS)
-        sx, sy = iw/cw, ih/ch
+    with left_col:
+        st.subheader("🖱️ Mouse se Box Banao")
+        st.caption("Image pe **drag karo** (rectangle) → box ban jayega → right panel mein label daalo")
 
-        with left_col:
-            st.subheader("🖱️ Mouse se Box Banao")
-            mode_lbl = st.radio("Mode:", ["✏️ Draw (box khicho)","🔧 Edit / Delete"],
-                                horizontal=True, key="cmode")
-            canvas_mode = "rect" if "Draw" in mode_lbl else "transform"
-            st.caption("Image pe **drag karo** → red box ban jayega" if canvas_mode=="rect"
-                       else "Box click karo → **Delete key** dabao")
-            res = st_canvas(background_image=canvas_bg, drawing_mode=canvas_mode,
-                            key="canvas_main", stroke_color="#E53935", stroke_width=2,
-                            fill_color="rgba(229,57,53,0.15)", height=ch, width=cw,
-                            update_streamlit=True, display_toolbar=False)
-            if res.json_data is not None:
-                shapes = [o for o in res.json_data.get("objects",[]) if o.get("type")=="rect"]
-                while len(st.session_state.boxes) < len(shapes):
-                    idx = len(st.session_state.boxes)
-                    st.session_state.boxes.append({"label":f"Field{idx+1}","font":"Roboto Bold",
-                        "size":40,"color":"#000000","align":"center","x":0,"y":0,"w":100,"h":50})
-                st.session_state.boxes = st.session_state.boxes[:len(shapes)]
-                for i,s in enumerate(shapes):
-                    st.session_state.boxes[i].update({
-                        "x":s["left"]*sx,"y":s["top"]*sy,
-                        "w":s["width"]*s.get("scaleX",1)*sx,
-                        "h":s["height"]*s.get("scaleY",1)*sy})
+        fig = make_plotly_canvas(pil, st.session_state.boxes)
+        sel = st.plotly_chart(fig, key="canvas_plotly", on_select="rerun",
+                              config={"displayModeBar": False}, use_container_width=True)
 
-        with right_col:
-            st.subheader("✏️ Text Boxes")
-            if not st.session_state.boxes:
-                st.info("👈 Image pe rectangle **drag** karo")
-            else:
-                for i, box in enumerate(st.session_state.boxes):
-                    with st.expander(f"📦 Box {i+1}: {box.get('label','')}",
-                                     expanded=(i==len(st.session_state.boxes)-1)):
-                        st.session_state.boxes[i]["label"] = st.text_input(
-                            "Excel Column Name", value=box.get("label",""), key=f"lbl_{i}")
-                        c1,c2 = st.columns(2)
-                        fn = box.get("font","Roboto Bold")
-                        with c1:
-                            st.session_state.boxes[i]["font"] = st.selectbox("Font", FONT_LIST,
-                                index=FONT_LIST.index(fn) if fn in FONT_LIST else 0, key=f"sfnt_{i}")
-                            st.session_state.boxes[i]["size"] = st.number_input(
-                                "Size",8,300,int(box.get("size",40)),key=f"ssz_{i}")
-                        with c2:
-                            st.session_state.boxes[i]["color"] = st.color_picker(
-                                "Color",box.get("color","#000000"),key=f"scol_{i}")
-                            st.session_state.boxes[i]["align"] = st.radio("Align",
-                                ["left","center","right"],
-                                index=["left","center","right"].index(box.get("align","center")),
-                                horizontal=True,key=f"saln_{i}")
-                        st.caption(f"X={int(box.get('x',0))} Y={int(box.get('y',0))} "
-                                   f"W={int(box.get('w',0))} H={int(box.get('h',0))}px")
-    else:
-        # ── Slider fallback ──
-        with left_col:
-            st.subheader("🖼 Image Preview")
+        # Process selection → new box
+        if sel and sel.selection:
+            box_sel = sel.selection.get("box") or {}
+            xs = box_sel.get("x", [])
+            ys = box_sel.get("y", [])
+            if len(xs) == 2 and len(ys) == 2:
+                x0 = max(0, min(xs)); x1 = min(iw, max(xs))
+                y0 = max(0, min(ys)); y1 = min(ih, max(ys))
+                w, h_box = x1-x0, y1-y0
+                if w > 10 and h_box > 10:
+                    st.session_state.boxes.append({
+                        "label": f"Field{len(st.session_state.boxes)+1}",
+                        "x":x0,"y":y0,"w":w,"h":h_box,
+                        "font":"Roboto Bold","size":40,
+                        "color":"#000000","align":"center"
+                    })
+                    st.session_state.editing_idx = len(st.session_state.boxes)-1
+                    st.rerun()
+
+    with right_col:
+        st.subheader("✏️ Text Boxes")
+        if not st.session_state.boxes:
+            st.info("👈 Image pe **drag** karo → box yahan dikhega")
+        else:
             ei = st.session_state.get("editing_idx", 0)
-            if not st.session_state.boxes: ei = None
-            elif ei >= len(st.session_state.boxes): ei = 0
-            st.image(draw_preview(pil, st.session_state.boxes, ei), use_container_width=True)
+            if ei >= len(st.session_state.boxes): ei = 0
+            opts = [f"Box {i+1}" for i in range(len(st.session_state.boxes))]
+            sel_r = st.radio("Box select karo:", opts, index=ei, horizontal=True, key="box_r")
+            ei    = int(sel_r.split()[1])-1
+            st.session_state.editing_idx = ei
+            box = st.session_state.boxes[ei]
 
-        with right_col:
-            st.subheader("✏️ Text Boxes")
-            if st.button("➕ Naya Box Add Karo", type="primary", use_container_width=True):
-                st.session_state.boxes.append({
-                    "label": f"Field{len(st.session_state.boxes)+1}",
-                    "x":iw//4,"y":ih//4,"w":iw//2,"h":ih//8,
-                    "font":"Roboto Bold","size":40,"color":"#000000","align":"center"})
-                st.session_state.editing_idx = len(st.session_state.boxes)-1
+            st.divider()
+            st.session_state.boxes[ei]["label"] = st.text_input(
+                "Excel Column Name", value=box.get("label",""), key=f"lbl_{ei}")
+
+            c1,c2 = st.columns(2)
+            fn = box.get("font","Roboto Bold")
+            with c1:
+                st.session_state.boxes[ei]["font"] = st.selectbox("Font", FONT_LIST,
+                    index=FONT_LIST.index(fn) if fn in FONT_LIST else 0, key=f"sfnt_{ei}")
+                st.session_state.boxes[ei]["size"] = st.number_input(
+                    "Size",8,300,int(box.get("size",40)),key=f"ssz_{ei}")
+            with c2:
+                st.session_state.boxes[ei]["color"] = st.color_picker(
+                    "Color",box.get("color","#000000"),key=f"scol_{ei}")
+                st.session_state.boxes[ei]["align"] = st.radio("Align",
+                    ["left","center","right"],
+                    index=["left","center","right"].index(box.get("align","center")),
+                    horizontal=True,key=f"saln_{ei}")
+
+            st.divider()
+            if st.button("🗑 Delete Box", use_container_width=True):
+                st.session_state.boxes.pop(ei)
+                st.session_state.editing_idx = max(0, ei-1)
                 st.rerun()
 
-            if not st.session_state.boxes:
-                st.info("Button dabao → box add hoga → sliders se adjust karo")
-            else:
-                ei = st.session_state.get("editing_idx", 0)
-                if ei >= len(st.session_state.boxes): ei = 0
-                opts = [f"Box {i+1}" for i in range(len(st.session_state.boxes))]
-                sel  = st.radio("Box select karo:", opts, index=ei, horizontal=True, key="box_r")
-                ei   = int(sel.split()[1])-1
-                st.session_state.editing_idx = ei
-                box  = st.session_state.boxes[ei]
-                st.divider()
-                st.session_state.boxes[ei]["label"] = st.text_input(
-                    "Excel Column Name", value=box["label"], key=f"lbl_{ei}")
-                st.markdown("**Position:**")
-                st.session_state.boxes[ei]["x"] = st.slider("⬅➡ X",0,iw-1,int(box["x"]),key=f"sx_{ei}")
-                st.session_state.boxes[ei]["y"] = st.slider("⬆⬇ Y",0,ih-1,int(box["y"]),key=f"sy_{ei}")
-                st.session_state.boxes[ei]["w"] = st.slider("↔ W",10,iw,int(box["w"]),key=f"sw_{ei}")
-                st.session_state.boxes[ei]["h"] = st.slider("↕ H",10,ih,int(box["h"]),key=f"sh_{ei}")
-                st.markdown("**Text Style:**")
-                c1,c2 = st.columns(2)
-                with c1:
-                    st.session_state.boxes[ei]["font"] = st.selectbox("Font",FONT_LIST,
-                        index=FONT_LIST.index(box["font"]) if box["font"] in FONT_LIST else 0,key=f"sfnt_{ei}")
-                    st.session_state.boxes[ei]["size"] = st.number_input("Size",8,300,int(box["size"]),key=f"ssz_{ei}")
-                with c2:
-                    st.session_state.boxes[ei]["color"] = st.color_picker("Color",box["color"],key=f"scol_{ei}")
-                    st.session_state.boxes[ei]["align"] = st.radio("Align",["left","center","right"],
-                        index=["left","center","right"].index(box.get("align","center")),
-                        horizontal=True,key=f"saln_{ei}")
-                if st.button("🗑 Delete Box", use_container_width=True):
-                    st.session_state.boxes.pop(ei)
-                    st.session_state.editing_idx = max(0,ei-1)
-                    st.rerun()
+            st.caption(f"X={int(box.get('x',0))} Y={int(box.get('y',0))} "
+                       f"W={int(box.get('w',0))} H={int(box.get('h',0))}px")
 
 # ══════════════════════════
 # TAB 2
@@ -400,7 +377,8 @@ with tab3:
     opts = df.apply(lambda r:" | ".join(str(r[c]) for c in cols[:3]),axis=1).tolist()
     prev_row = df.iloc[opts.index(st.selectbox("Contact:", opts))].to_dict()
     if st.button("🖼 Preview Generate Karo"):
-        with st.spinner("..."): st.image(render_image(pil,st.session_state.boxes,prev_row),width=480)
+        with st.spinner("..."):
+            st.image(render_image(pil,st.session_state.boxes,prev_row),width=480)
     st.divider()
 
     st.subheader("📋 Contacts")
@@ -414,10 +392,10 @@ with tab3:
 
     selected = []
     for idx,row in df.iterrows():
-        k = f"s_{idx}"
-        if k not in st.session_state: st.session_state[k] = True
+        k=f"s_{idx}"
+        if k not in st.session_state: st.session_state[k]=True
         if st.checkbox(" | ".join(f"{c}:{row[c]}" for c in cols[:4]),
-                       value=st.session_state[k], key=f"chk_{idx}"):
+                       value=st.session_state[k],key=f"chk_{idx}"):
             selected.append(idx)
 
     st.divider()
@@ -426,38 +404,38 @@ with tab3:
     if selected:
         if st.button(f"🚀 {len(selected)} contacts ko WhatsApp Bhejo!", type="primary",
                      use_container_width=True):
-            errs = []
+            errs=[]
             if not ai_key:    errs.append("AI Sensy API Key missing")
             if send_img and not imgbb_key: errs.append("imgbb Key missing")
             for e in errs: st.error(e)
             if errs: st.stop()
 
-            params_cols = [c.strip() for c in param_str.split(",") if c.strip()]
-            prog = st.progress(0, text="Starting...")
-            log_box = st.empty()
+            params_cols=[c.strip() for c in param_str.split(",") if c.strip()]
+            prog=st.progress(0,text="Starting...")
+            log_box=st.empty()
             logs=[]; success=failed=0
 
             for i,idx in enumerate(selected):
-                row   = df.iloc[idx].to_dict()
-                phone = normalize(str(row.get(phone_col,"")), cc)
-                msg   = message
+                row=df.iloc[idx].to_dict()
+                phone=normalize(str(row.get(phone_col,"")),cc)
+                msg=message
                 for col in cols: msg=msg.replace("{"+str(col)+"}",str(row.get(col,"")))
-                t_params = [str(row.get(c,"")) for c in params_cols]
-                img_url  = ""
-                prog.progress(i/len(selected), text=f"Sending {i+1}/{len(selected)}: {phone}...")
+                t_params=[str(row.get(c,"")) for c in params_cols]
+                img_url=""
+                prog.progress(i/len(selected),text=f"Sending {i+1}/{len(selected)}: {phone}...")
                 try:
                     if send_img and imgbb_key:
-                        img_url = upload_imgbb(render_image(pil,st.session_state.boxes,row), imgbb_key)
-                    send_aisensy(ai_key, campaign, phone, username, t_params, img_url)
+                        img_url=upload_imgbb(render_image(pil,st.session_state.boxes,row),imgbb_key)
+                    send_aisensy(ai_key,campaign,phone,username,t_params,img_url)
                     logs.append(f"✅ {phone}"); success+=1
                 except Exception as ex:
                     logs.append(f"❌ {phone} — {ex}"); failed+=1
-                log_box.code("\n".join(logs[-15:]), language=None)
-                if i < len(selected)-1: time.sleep(delay_sec)
+                log_box.code("\n".join(logs[-15:]),language=None)
+                if i<len(selected)-1: time.sleep(delay_sec)
 
-            prog.progress(1.0, text="Done!")
+            prog.progress(1.0,text="Done!")
             if failed==0:
                 st.success(f"🎉 {success} messages sent!"); st.balloons()
             else:
                 st.warning(f"✅ {success} sent  |  ❌ {failed} failed")
-            st.code("\n".join(logs), language=None)
+            st.code("\n".join(logs),language=None)
