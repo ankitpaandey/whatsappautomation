@@ -269,6 +269,7 @@ with tab1:
     img_file = st.file_uploader("Template image upload karo", type=["png","jpg","jpeg","webp"])
     if img_file:
         st.session_state.template_pil = Image.open(img_file).convert("RGBA")
+        st.session_state.boxes = []   # nai image pe boxes reset
 
     if st.session_state.template_pil is None:
         st.info("👆 Apni template image upload karo (invitation, certificate, flyer...)")
@@ -277,66 +278,100 @@ with tab1:
     pil = st.session_state.template_pil
     iw, ih = pil.size
 
+    # Canvas display size (max 820px wide)
+    MAX_W = 820
+    c_scale = min(1.0, MAX_W / iw)
+    cw = int(iw * c_scale)
+    ch = int(ih * c_scale)
+    canvas_bg = pil.convert("RGB").resize((cw, ch), Image.LANCZOS)
+    sx = iw / cw   # canvas → real image scale factors
+    sy = ih / ch
+
     left_col, right_col = st.columns([3, 2])
+
+    with left_col:
+        st.subheader("🖱️ Mouse se Box Banao")
+        mode_lbl = st.radio(
+            "Mode:", ["✏️ Draw (box khicho)", "🔧 Edit / Delete"],
+            horizontal=True, key="cmode"
+        )
+        canvas_mode = "rect" if "Draw" in mode_lbl else "transform"
+        if canvas_mode == "rect":
+            st.caption("Image pe **drag karo** → rectangle ban jayega → label right panel mein dalo")
+        else:
+            st.caption("Box click karo to select → **Delete key** dabao → box hatega")
+
+        try:
+            from streamlit_drawable_canvas import st_canvas
+            canvas_result = st_canvas(
+                background_image=canvas_bg,
+                drawing_mode=canvas_mode,
+                key="canvas_main",
+                stroke_color="#E53935",
+                stroke_width=2,
+                fill_color="rgba(229,57,53,0.15)",
+                height=ch,
+                width=cw,
+                update_streamlit=True,
+                display_toolbar=False,
+            )
+            # ── Sync canvas shapes → session_state.boxes ──────────
+            if canvas_result.json_data is not None:
+                shapes = [o for o in canvas_result.json_data.get("objects", [])
+                          if o.get("type") == "rect"]
+                # Add metadata for newly drawn shapes
+                while len(st.session_state.boxes) < len(shapes):
+                    idx = len(st.session_state.boxes)
+                    st.session_state.boxes.append({
+                        "label": f"Field{idx+1}",
+                        "font": "Roboto Bold", "size": 40,
+                        "color": "#000000", "align": "center",
+                        "x": 0, "y": 0, "w": 100, "h": 50,
+                    })
+                # Trim if shapes deleted on canvas
+                st.session_state.boxes = st.session_state.boxes[:len(shapes)]
+                # Update positions from canvas (scale back to real image coords)
+                for i, s in enumerate(shapes):
+                    st.session_state.boxes[i].update({
+                        "x": s["left"] * sx,
+                        "y": s["top"] * sy,
+                        "w": s["width"]  * s.get("scaleX", 1) * sx,
+                        "h": s["height"] * s.get("scaleY", 1) * sy,
+                    })
+        except ImportError:
+            st.error("Canvas library install nahi hai. requirements_web.txt mein `streamlit-drawable-canvas==0.9.3` add karo.")
 
     with right_col:
         st.subheader("✏️ Text Boxes")
 
-        if st.button("➕ Naya Box Add Karo", type="primary", use_container_width=True):
-            st.session_state.boxes.append({
-                "label": f"Field{len(st.session_state.boxes)+1}",
-                "x": iw//4, "y": ih//4, "w": iw//2, "h": ih//8,
-                "font": "Roboto Bold", "size": 40,
-                "color": "#000000", "align": "center",
-            })
-            st.session_state.editing_idx = len(st.session_state.boxes)-1
-            st.rerun()
-
         if not st.session_state.boxes:
-            st.info("Button dabao → box image ke center mein add hoga → sliders se position adjust karo")
+            st.info("👈 Image pe rectangle **drag** karo → yahan box dikhega")
         else:
-            if st.session_state.editing_idx is None or st.session_state.editing_idx >= len(st.session_state.boxes):
-                st.session_state.editing_idx = 0
-            ei = st.session_state.editing_idx
+            for i, box in enumerate(st.session_state.boxes):
+                with st.expander(f"📦 Box {i+1}: {box.get('label','')}",
+                                 expanded=(i == len(st.session_state.boxes)-1)):
+                    new_lbl = st.text_input("Excel Column Name", value=box.get("label",""), key=f"lbl_{i}")
+                    st.session_state.boxes[i]["label"] = new_lbl
 
-            opts = [f"Box {i+1}" for i in range(len(st.session_state.boxes))]
-            sel  = st.radio("Box select karo:", opts, index=ei, horizontal=True, key="box_radio")
-            ei   = int(sel.split(" ")[1])-1
-            st.session_state.editing_idx = ei
-            box  = st.session_state.boxes[ei]
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        fn = box.get("font","Roboto Bold")
+                        st.session_state.boxes[i]["font"] = st.selectbox(
+                            "Font", FONT_LIST,
+                            index=FONT_LIST.index(fn) if fn in FONT_LIST else 0,
+                            key=f"sfnt_{i}")
+                        st.session_state.boxes[i]["size"] = st.number_input(
+                            "Size", 8, 300, int(box.get("size", 40)), key=f"ssz_{i}")
+                    with c2:
+                        st.session_state.boxes[i]["color"] = st.color_picker(
+                            "Color", box.get("color","#000000"), key=f"scol_{i}")
+                        st.session_state.boxes[i]["align"] = st.radio(
+                            "Align", ["left","center","right"],
+                            index=["left","center","right"].index(box.get("align","center")),
+                            horizontal=True, key=f"saln_{i}")
 
-            st.divider()
-            new_lbl = st.text_input("Excel Column Name", value=box["label"], key=f"lbl_{ei}")
-            st.session_state.boxes[ei]["label"] = new_lbl
-
-            st.markdown("**Position (slide karo):**")
-            st.session_state.boxes[ei]["x"] = st.slider("⬅➡ X", 0, iw-1, int(box["x"]), key=f"sx_{ei}")
-            st.session_state.boxes[ei]["y"] = st.slider("⬆⬇ Y", 0, ih-1, int(box["y"]), key=f"sy_{ei}")
-            st.session_state.boxes[ei]["w"] = st.slider("↔ Width",  10, iw, int(box["w"]), key=f"sw_{ei}")
-            st.session_state.boxes[ei]["h"] = st.slider("↕ Height", 10, ih, int(box["h"]), key=f"sh_{ei}")
-
-            st.markdown("**Text Style:**")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.session_state.boxes[ei]["font"]  = st.selectbox("Font", FONT_LIST,
-                    index=FONT_LIST.index(box["font"]) if box["font"] in FONT_LIST else 0, key=f"sfnt_{ei}")
-                st.session_state.boxes[ei]["size"]  = st.number_input("Size", 8, 300, int(box["size"]), key=f"ssz_{ei}")
-            with c2:
-                st.session_state.boxes[ei]["color"] = st.color_picker("Color", box["color"], key=f"scol_{ei}")
-                st.session_state.boxes[ei]["align"] = st.radio("Align", ["left","center","right"],
-                    index=["left","center","right"].index(box.get("align","center")),
-                    horizontal=True, key=f"saln_{ei}")
-
-            if st.button("🗑 Delete This Box", use_container_width=True):
-                st.session_state.boxes.pop(ei)
-                st.session_state.editing_idx = max(0, ei-1) if st.session_state.boxes else None
-                st.rerun()
-
-    with left_col:
-        st.subheader("🖼 Image Preview")
-        st.caption(f"Size: {iw}×{ih}px  |  🔵 Blue = selected box")
-        st.image(draw_boxes_preview(pil, st.session_state.boxes, st.session_state.editing_idx),
-                 use_container_width=True)
+                    st.caption(f"X={int(box.get('x',0))}  Y={int(box.get('y',0))}  "
+                               f"W={int(box.get('w',0))}  H={int(box.get('h',0))} px")
 
 # ══════════════════════════
 # TAB 2 — Excel
