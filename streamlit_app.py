@@ -13,16 +13,57 @@ st.set_page_config(
     layout="wide"
 )
 
+# ════════════════════════════════════════════════
+# PASSWORD GATE — sirf authorized team hi use kare
+# ════════════════════════════════════════════════
+def _check_login():
+    if st.session_state.get("_auth", False):
+        return True
+
+    st.markdown("""
+    <style>
+    .login-box { max-width:420px; margin:6rem auto; padding:2.5rem 2rem;
+                 background:#f8f9fa; border-radius:16px;
+                 box-shadow:0 4px 24px rgba(0,0,0,0.10); }
+    .login-title { text-align:center; margin-bottom:0.5rem; }
+    .login-sub   { text-align:center; color:#888; margin-top:0; }
+    </style>
+    <div class="login-box">
+      <h1 class="login-title">📱 Avro India</h1>
+      <p class="login-sub">WhatsApp Auto Sender</p>
+      <p class="login-sub">🔒 Authorized Users Only</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        pwd = st.text_input("Password", type="password",
+                            placeholder="Apna password daalo...")
+        if st.button("Login →", type="primary", use_container_width=True):
+            correct = st.secrets.get("app_password", "avro@2024")
+            if pwd == correct:
+                st.session_state["_auth"] = True
+                st.rerun()
+            else:
+                st.error("❌ Galat password! Dobara try karo.")
+        st.caption("💡 Password nahi pata? Ankit se poochho.")
+    return False
+
+if not _check_login():
+    st.stop()
+
+# ════════════════════════════════════════════════
+
 AISENSY_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
 IMGBB_URL   = "https://api.imgbb.com/1/upload"
 
-# ── Pre-filled credentials (secrets se override hoti hain) ──
+# ── Credentials: Streamlit Secrets se aate hain ──
 try:
-    _KEY    = st.secrets["aisensy_key"]
-    _IMGBB  = st.secrets.get("imgbb_key", "96555fd78678982a6898c38769ee2145")
+    _KEY   = st.secrets.get("aisensy_key", "")
+    _IMGBB = st.secrets.get("imgbb_key", "")
 except Exception:
-    _KEY    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY0ZjcxMzlhZGY5NWQ1MGJkZGQ1OGQ2OSIsIm5hbWUiOiJBdnJvIGluZGlhIiwiYXBwTmFtZSI6IkFpU2Vuc3kiLCJjbGllbnRJZCI6IjY0ZDM1NWZhOTU3YzU0MTAzZjA0ZjZkOSIsImFjdGl2ZVBsYW4iOiJCQVNJQ19NT05USExZIiwiaWF0IjoxNzg5NjQzOTk0fQ.1bb2WLGCQxzXx1bO0_2xgLvbTRQ_rNL2cjAKKZmbl6Q"
-    _IMGBB  = "96555fd78678982a6898c38769ee2145"
+    _KEY   = ""
+    _IMGBB = ""
 
 # ── Saved campaigns list (easily editable) ──
 CAMPAIGNS = [
@@ -175,6 +216,12 @@ st.markdown("""
 # ════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
+
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state["_auth"] = False
+        st.rerun()
+
+    st.divider()
 
     # ── Campaign select ──
     st.markdown("### 📋 Template / Campaign")
